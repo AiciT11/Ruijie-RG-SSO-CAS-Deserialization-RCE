@@ -416,6 +416,7 @@ SecRule ARGS:execution "@contains H4sI" \
 | 2026-06-05 | URLDNS probe confirms deserialization on multiple targets |
 | 2026-06-05 | CBU1 RCE confirmed — `uid=0(root)` on 40+ authorized targets |
 | 2026-06-06 | Advisory published; vendor notification sent |
+| 2026-06-06 | RCE re-verified on sfgl.njtech.edu.cn — `uid=0(root)` callback received from two K8s nodes |
 | TBD | Vendor patch released |
 | TBD | Full public disclosure |
 

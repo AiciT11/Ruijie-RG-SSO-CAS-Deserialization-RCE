@@ -433,6 +433,7 @@ SecRule ARGS:execution "@contains H4sI" \
 
 ## Researcher
 
+- **GitHub:** [@AiciT11](https://github.com/AiciT11)
 - **Affiliation:** Chongming Security Lab (重明安全实验室), NUIST
 - **Certifications:** CISP-PTE, CNVD vulnerability researcher
 - **Contact:** jaynetito650@gmail.com

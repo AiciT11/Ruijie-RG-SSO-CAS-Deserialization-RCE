@@ -440,3 +440,64 @@ SecRule ARGS:execution "@contains H4sI" \
 ---
 
 *All testing was conducted under written authorization from affected institutions. No unauthorized access was performed. No user data was accessed or exfiltrated.*
+
+---
+
+## Vendor Attribution Evidence
+
+This section provides technical proof that the affected product is owned and maintained by **Ruijie Networks (锐捷网络股份有限公司 / 北京星网锐捷网络技术有限公司)**, submitted in response to CNVD attribution review feedback.
+
+### Overview
+
+Ruijie Networks operates their own production SSO instance at `sid.ruijie.com.cn`. This server exhibits **all three unique fingerprints** of the vulnerable product, directly tying the `login-page-flowkey` codebase to the vendor.
+
+### Evidence 1 — OV SSL Certificate on `sid.ruijie.com.cn`
+
+The TLS certificate for `sid.ruijie.com.cn` is an Organization Validated (OV) certificate issued by GlobalSign, where the **O (Organization)** field is cryptographically bound to the legal entity:
+
+```
+Subject: O = 北京星网锐捷网络技术有限公司
+Issuer:  GlobalSign nv-sa (OV)
+Valid:   2025-07-01 → 2026-08-02
+```
+
+OV certificates require notarized legal registration documents — the organization name cannot be spoofed.
+
+![sid.ruijie.com.cn TLS certificate — O=北京星网锐捷网络技术有限公司, GlobalSign OV](screenshots/attr_01_ssl_cert.jpg)
+
+### Evidence 2 — `/linkid/` API Path and Copyright Notice
+
+The login page at `sid.ruijie.com.cn` loads resources from the `/linkid/` path (e.g., `/linkid/api/image/download/login_favicon.png`) — the same internal namespace present on all affected institutions. The page footer displays:
+
+```
+版权所有 ©锐捷网络股份有限公司
+(Copyright © Ruijie Networks Co., Ltd.)
+```
+
+![sid.ruijie.com.cn page source — /linkid/ API path and copyright footer](screenshots/attr_02_linkid_copyright.jpg)
+
+### Evidence 3 — `login-page-flowkey` Element on Vendor's Own Server
+
+The element `<p id="login-page-flowkey">` — the exact fingerprint used to identify vulnerable instances (`body="login-page-flowkey"`, 275 FOFA results) — is present in the DOM of `sid.ruijie.com.cn`:
+
+![sid.ruijie.com.cn DevTools — login-page-flowkey element present](screenshots/attr_03_flowkey_element.jpg)
+
+This element **does not exist** in upstream Apereo CAS source code (verified against `apereo/cas` GitHub history). It is a Ruijie-specific modification.
+
+### Evidence Summary
+
+| # | Evidence | Value | Verification Method |
+|---|----------|-------|---------------------|
+| 1 | SSL OV Certificate O= field | 北京星网锐捷网络技术有限公司 | GlobalSign OV issuance requires legal registration proof |
+| 2 | Page copyright footer | ©锐捷网络股份有限公司 | Static text in `sid.ruijie.com.cn` HTML |
+| 3 | Internal API namespace | `/linkid/api/image/download/` | Identical path present on all 45 confirmed-vulnerable instances |
+| 4 | Custom HTML element | `<p id="login-page-flowkey">` | Absent from upstream Apereo CAS; present on `sid.ruijie.com.cn` |
+| 5 | JAR filename | `rg-sso-cas-0.0.1-SNAPSHOT.jar` | Observed on exploited instances via command output exfiltration |
+
+### Conclusion
+
+`sid.ruijie.com.cn` is a production server operated by Ruijie Networks that runs the identical custom CAS build as the affected institutions. The combination of an OV-certified domain, the `/linkid/` path namespace, the vendor copyright notice, and the `login-page-flowkey` fingerprint constitutes unambiguous proof of vendor ownership.
+
+**Vendor:** 北京星网锐捷网络技术有限公司 / Ruijie Networks Co., Ltd.  
+**Product:** RG-SSO 统一身份认证系统 (LinkID)  
+**Vendor SSO:** `sid.ruijie.com.cn`

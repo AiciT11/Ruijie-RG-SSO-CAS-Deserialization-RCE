@@ -417,8 +417,23 @@ SecRule ARGS:execution "@contains H4sI" \
 | 2026-06-05 | CBU1 RCE confirmed — `uid=0(root)` on 40+ authorized targets |
 | 2026-06-06 | Advisory published; vendor notification sent |
 | 2026-06-06 | RCE re-verified on sfgl.njtech.edu.cn — `uid=0(root)` callback received from two K8s nodes |
+| 2026-06-10 | Submitted to CNVD with full technical report and vendor attribution evidence |
+| 2026-06-17 | **CNVD-2026-24521 assigned** — rated High (AV:N/AC:L/Au:N/C:C/I:C/A:C), vendor confirmed as 北京星网锐捷网络技术有限公司 |
 | TBD | Vendor patch released |
 | TBD | Full public disclosure |
+
+---
+
+## CNVD Disclosure
+
+This vulnerability has been accepted by the China National Vulnerability Database.
+
+**CNVD-ID:** CNVD-2026-24521  
+**Severity:** High (AV:N/AC:L/Au:N/C:C/I:C/A:C)  
+**Affected Product:** 北京星网锐捷网络技术有限公司 RG-SSO统一身份认证平台  
+**Submitted:** 2026-06-10 | **Accepted:** 2026-06-17
+
+![CNVD-2026-24521 vulnerability record](screenshots/cnvd_2026_24521.jpg)
 
 ---
 
@@ -428,6 +443,7 @@ SecRule ARGS:execution "@contains H4sI" \
 - ysoserial: https://github.com/frohoff/ysoserial
 - CWE-502: https://cwe.mitre.org/data/definitions/502.html
 - FOFA: `body="login-page-flowkey"` (275 results, 2026-06-05)
+- CNVD: CNVD-2026-24521
 
 ---
 
